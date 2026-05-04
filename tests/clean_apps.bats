@@ -683,3 +683,119 @@ EOF
 
     [ "$status" -eq 0 ]
 }
+
+@test "clean_orphaned_container_stubs removes stub container when app is uninstalled" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+
+# Stub container: only the metadata plist, no Data/ subdir
+stub="$HOME/Library/Containers/com.macpaw.CleanMyMac-mas"
+mkdir -p "$stub"
+touch "$stub/.com.apple.containermanagerd.metadata.plist"
+
+# Canonical app path does not exist (uninstalled)
+# mdfind returns nothing (uninstalled)
+mdfind() { echo ""; return 0; }
+run_with_timeout() { shift; "$@"; }
+note_activity() { :; }
+debug_log() { :; }
+is_path_whitelisted() { return 1; }
+
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+
+clean_orphaned_container_stubs
+
+if [[ ! -d "$stub" ]]; then
+    echo "PASS: stub removed"
+else
+    echo "FAIL: stub still exists"
+    exit 1
+fi
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PASS: stub removed"* ]]
+    [[ "$output" == *"Orphaned app container stubs"* ]]
+}
+
+@test "clean_orphaned_container_stubs preserves container when app is installed" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+
+stub="$HOME/Library/Containers/com.macpaw.CleanMyMac-mas"
+mkdir -p "$stub"
+touch "$stub/.com.apple.containermanagerd.metadata.plist"
+
+# Simulate the canonical app path existing (installed)
+mkdir -p "$HOME/Applications/CleanMyMac X.app"
+
+note_activity() { :; }
+debug_log() { :; }
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+
+# Override app_path check: patch the pattern to use test app path
+# We do this by creating the app at the pattern path via HOME substitution trick.
+# The function checks /Applications/CleanMyMac X.app — create it under HOME for the test
+# by patching HOME itself to redirect the check.
+mkdir -p "/Applications/CleanMyMac X.app" 2>/dev/null || true
+
+clean_orphaned_container_stubs
+
+if [[ -d "$stub" ]]; then
+    echo "PASS: stub preserved"
+else
+    echo "FAIL: stub was wrongly removed"
+    exit 1
+fi
+
+# Cleanup the fake app we created
+rmdir "/Applications/CleanMyMac X.app" 2>/dev/null || true
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PASS: stub preserved"* ]]
+}
+
+@test "clean_orphaned_container_stubs preserves container with Data subdirectory" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+
+# Container has a Data/ subtree — real sandbox data, must NOT be deleted
+stub="$HOME/Library/Containers/com.macpaw.CleanMyMac-mas"
+mkdir -p "$stub/Data/Library/Preferences"
+touch "$stub/.com.apple.containermanagerd.metadata.plist"
+touch "$stub/Data/Library/Preferences/settings.plist"
+
+mdfind() { echo ""; return 0; }
+run_with_timeout() { shift; "$@"; }
+note_activity() { :; }
+debug_log() { :; }
+is_path_whitelisted() { return 1; }
+
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+
+clean_orphaned_container_stubs
+
+if [[ -d "$stub/Data" ]]; then
+    echo "PASS: data container preserved"
+else
+    echo "FAIL: data container was wrongly removed"
+    exit 1
+fi
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PASS: data container preserved"* ]]
+}
