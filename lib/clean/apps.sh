@@ -460,8 +460,6 @@ clean_orphaned_system_services() {
         "us.zoom.*:/Applications/zoom.us.app"
         # remot3.it / Remote.It – CLI daemon
         "it.remote.cli:/Applications/Remote.It.app"
-        # Cindori (Oskar Groth) – TEHelper shared by Lungo, Silenz, Turbo Boost Switcher
-        "org.cindori.*:/Applications/Lungo.app|/Applications/Silenz.app|/Applications/Turbo Boost Switcher.app"
         # Docker – system socket and vmnetd helpers (Docker.app manages these)
         "com.docker.*:/Applications/Docker.app"
         # NetBird / Wiretrustee – CLI-managed daemon (binary in /usr/local/bin)
