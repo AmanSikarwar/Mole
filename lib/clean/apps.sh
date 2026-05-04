@@ -803,6 +803,7 @@ clean_orphaned_container_stubs() {
     )
 
     local removed_count=0
+    local failed_count=0
     local _ng_state
     _ng_state=$(shopt -p nullglob || true)
     shopt -s nullglob
@@ -838,9 +839,15 @@ clean_orphaned_container_stubs() {
             fi
 
             if [[ "$DRY_RUN" != "true" ]]; then
-                safe_remove "$container_dir" true >/dev/null 2>&1 || true
+                if safe_remove "$container_dir" true >/dev/null 2>&1; then
+                    removed_count=$((removed_count + 1))
+                else
+                    debug_log "Failed to remove stub container: $container_dir"
+                    failed_count=$((failed_count + 1))
+                fi
+            else
+                removed_count=$((removed_count + 1))
             fi
-            removed_count=$((removed_count + 1))
         done
     done
 
@@ -855,5 +862,8 @@ clean_orphaned_container_stubs() {
         fi
         files_cleaned=$((files_cleaned + removed_count))
         total_items=$((total_items + 1))
+    fi
+    if [[ $failed_count -gt 0 ]]; then
+        echo -e "  ${GRAY}${ICON_WARNING}${NC} Orphaned container stubs: $failed_count could not be removed"
     fi
 }
