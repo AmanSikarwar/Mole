@@ -482,6 +482,7 @@ clean_orphaned_system_services() {
         # Split on '|' to support multi-app helpers (e.g. Cindori TEHelper).
         local _IFS_save="$IFS"
         IFS='|'
+        # shellcheck disable=SC2206  # intentional word-split on '|' delimiter
         local -a app_paths=($app_path_raw)
         IFS="$_IFS_save"
 
