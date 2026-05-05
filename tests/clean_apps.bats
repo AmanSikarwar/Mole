@@ -732,20 +732,17 @@ stub="$HOME/Library/Containers/com.macpaw.CleanMyMac-mas"
 mkdir -p "$stub"
 touch "$stub/.com.apple.containermanagerd.metadata.plist"
 
-# Simulate the canonical app path existing (installed)
+# Simulate the app installed in a user-level Applications directory.
 mkdir -p "$HOME/Applications/CleanMyMac X.app"
 
+mdfind() { echo ""; return 0; }
+run_with_timeout() { shift; "$@"; }
 note_activity() { :; }
 debug_log() { :; }
+is_path_whitelisted() { return 1; }
 files_cleaned=0
 total_items=0
 total_size_cleaned=0
-
-# Override app_path check: patch the pattern to use test app path
-# We do this by creating the app at the pattern path via HOME substitution trick.
-# The function checks /Applications/CleanMyMac X.app — create it under HOME for the test
-# by patching HOME itself to redirect the check.
-mkdir -p "/Applications/CleanMyMac X.app" 2>/dev/null || true
 
 clean_orphaned_container_stubs
 
@@ -756,8 +753,6 @@ else
     exit 1
 fi
 
-# Cleanup the fake app we created
-rmdir "/Applications/CleanMyMac X.app" 2>/dev/null || true
 EOF
 
     [ "$status" -eq 0 ]
@@ -798,4 +793,39 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"PASS: data container preserved"* ]]
+}
+
+@test "clean_orphaned_container_stubs preserves non-metadata-only container" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+
+stub="$HOME/Library/Containers/com.macpaw.CleanMyMac-mas"
+mkdir -p "$stub"
+touch "$stub/.com.apple.containermanagerd.metadata.plist"
+touch "$stub/session.lock"
+
+mdfind() { echo ""; return 0; }
+run_with_timeout() { shift; "$@"; }
+note_activity() { :; }
+debug_log() { :; }
+is_path_whitelisted() { return 1; }
+
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+
+clean_orphaned_container_stubs
+
+if [[ -f "$stub/session.lock" ]]; then
+    echo "PASS: non-stub container preserved"
+else
+    echo "FAIL: non-stub container was wrongly removed"
+    exit 1
+fi
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PASS: non-stub container preserved"* ]]
 }

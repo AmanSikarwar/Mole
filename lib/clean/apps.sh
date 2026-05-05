@@ -432,10 +432,6 @@ clean_orphaned_system_services() {
 
     local orphaned_count=0
     local -a orphaned_files=()
-    # Tracks orphans confirmed via binary-existence; should_protect_path is skipped
-    # for these because the backing binary is already verified gone.
-    local -a binary_confirmed_orphans=()
-
     # Force-protect list: if a plist's bundle ID matches one of these patterns AND
     # the associated app IS installed, skip removal even if the binary appears missing.
     # Format: "bundle_id_glob:pipe-separated app paths"
@@ -607,7 +603,6 @@ clean_orphaned_system_services() {
             # Generic detection: binary-existence check.
             if _plist_is_orphaned "$plist" "$bundle_id"; then
                 orphaned_files+=("$plist")
-                binary_confirmed_orphans+=("$plist")
                 orphaned_count=$((orphaned_count + 1))
             fi
         done < <(sudo find /Library/LaunchDaemons -maxdepth 1 -name "*.plist" -print0 2>/dev/null)
@@ -627,7 +622,6 @@ clean_orphaned_system_services() {
             # Generic detection: binary-existence check.
             if _plist_is_orphaned "$plist" "$bundle_id"; then
                 orphaned_files+=("$plist")
-                binary_confirmed_orphans+=("$plist")
                 orphaned_count=$((orphaned_count + 1))
             fi
         done < <(sudo find /Library/LaunchAgents -maxdepth 1 -name "*.plist" -print0 2>/dev/null)
@@ -714,20 +708,7 @@ clean_orphaned_system_services() {
             if [[ "$DRY_RUN" == "true" ]]; then
                 debug_log "[DRY RUN] Would remove orphaned service: $orphan_file"
             else
-                # Binary-confirmed orphans: the backing executable is already verified
-                # gone by _plist_is_orphaned. Skip the redundant should_protect_path
-                # check — DATA_PROTECTED_BUNDLES is conservative and would re-block
-                # removal of e.g. us.zoom.updater* even when zoom.us.app is uninstalled.
-                local _is_binary_confirmed=false
-                local _bc_file
-                for _bc_file in "${binary_confirmed_orphans[@]}"; do
-                    if [[ "$_bc_file" == "$orphan_file" ]]; then
-                        _is_binary_confirmed=true
-                        break
-                    fi
-                done
-
-                if [[ "$_is_binary_confirmed" == "false" ]] && should_protect_path "$orphan_file"; then
+                if should_protect_path "$orphan_file"; then
                     debug_log "Skipping protected orphaned service: $orphan_file"
                     skipped_protected_count=$((skipped_protected_count + 1))
                     continue
@@ -794,7 +775,7 @@ clean_orphaned_container_stubs() {
 
     # Format: "bundle_id_glob:app_path_to_check"
     # The app_path_to_check is the canonical .app location; the stub is removed
-    # only when neither that path nor mdfind can locate the app.
+    # only when no common install location nor mdfind can locate the app.
     local -a stub_patterns=(
         # MacPaw CleanMyMac X (direct and MAS variants, bare bundle ID)
         "com.macpaw.CleanMyMac*:/Applications/CleanMyMac X.app"
@@ -808,30 +789,50 @@ clean_orphaned_container_stubs() {
     _ng_state=$(shopt -p nullglob || true)
     shopt -s nullglob
 
+    _container_stub_app_exists() {
+        local bundle_id="$1"
+        local app_path="$2"
+
+        [[ -d "$app_path" || -e "$app_path" ]] && return 0
+
+        local app_name
+        app_name=$(basename "$app_path")
+        case "$app_path" in
+            /Applications/*)
+                [[ -d "$HOME/Applications/$app_name" ]] && return 0
+                [[ -d "/Applications/Setapp/$app_name" ]] && return 0
+                [[ -d "$HOME/Library/Application Support/Setapp/Applications/$app_name" ]] && return 0
+                ;;
+        esac
+
+        if [[ "$bundle_id" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ ${#bundle_id} -ge 5 ]]; then
+            local app_found
+            app_found=$(run_with_timeout 5 mdfind "kMDItemCFBundleIdentifier == '$bundle_id'" 2> /dev/null | head -1 || echo "")
+            [[ -n "$app_found" ]] && return 0
+        fi
+
+        return 1
+    }
+
     local pattern_entry
     for pattern_entry in "${stub_patterns[@]}"; do
         local bundle_glob="${pattern_entry%%:*}"
         local app_path="${pattern_entry#*:}"
-
-        # If the canonical app path exists, the app is installed — skip.
-        [[ -d "$app_path" ]] && continue
 
         local container_dir
         for container_dir in "$containers_dir"/$bundle_glob; do
             [[ -d "$container_dir" ]] || continue
             [[ -L "$container_dir" ]] && continue
 
-            # Skip if the container has a Data/ subtree (real sandbox data).
-            [[ -d "$container_dir/Data" ]] && continue
+            local metadata_plist="$container_dir/.com.apple.containermanagerd.metadata.plist"
+            [[ -f "$metadata_plist" ]] || continue
+            if find "$container_dir" -mindepth 1 -maxdepth 1 ! -name ".com.apple.containermanagerd.metadata.plist" -print -quit 2> /dev/null | grep -q .; then
+                continue
+            fi
 
             local bundle_id="${container_dir##*/}"
 
-            # Double-check via mdfind that the app is truly gone.
-            if [[ "$bundle_id" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ ${#bundle_id} -ge 5 ]]; then
-                local app_found
-                app_found=$(run_with_timeout 5 mdfind "kMDItemCFBundleIdentifier == '$bundle_id'" 2>/dev/null | head -1 || echo "")
-                [[ -n "$app_found" ]] && continue
-            fi
+            _container_stub_app_exists "$bundle_id" "$app_path" && continue
 
             if is_path_whitelisted "$container_dir" 2>/dev/null; then
                 debug_log "Skipping whitelisted stub container: $container_dir"
